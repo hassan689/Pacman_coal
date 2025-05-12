@@ -1,17 +1,15 @@
 [org 0x0100]
 jmp start
 
-; %include "head.asm"
 %include "Gamemap.asm"
 
 ; Game state variables
-row: dw 10      ; initial row position of Pacman
-col: dw 40      ; initial column position of Pacman
-direction: db 0 ; 0=right, 1=left, 2=up, 3=down
+row: dw 10   ; initial row position of Pacman
+col: dw 40   ; initial column position of Pacman
+direction: db 0  ; 0=right, 1=left, 2=up, 3=down
 mouth_state: db 0 ; 0=open, 1=closed
 speed_counter: db 0 
-random_seed: dw 0xABCD ; Seed for random number generator
-
+random_seed: dw 0xABCD  ; Seed for random number generator
 ghosts:
     ; ghost 1
     dw 5, 20
@@ -46,8 +44,53 @@ ghosts:
     db 3
     db 0x4C     ; cyan
 
-
+oldisr: dd 0    ; space for saving old keyboard ISR
 oldtimer: dd 0  ; space for saving old timer ISR
+
+; -------------------------------------------------------------------
+; Keyboard interrupt service routine
+; -------------------------------------------------------------------
+
+kbisr:
+    push ax
+    in al, 0x60     ; read a char from keyboard port    
+    
+    ; Check for key presses (scancodes)
+    cmp al, 0x11    ; W key pressed (up)
+    je change_up
+    cmp al, 0x1F    ; S key pressed (down)
+    je change_down
+    cmp al, 0x1E    ; A key pressed (left)
+    je change_left
+    cmp al, 0x20    ; D key pressed (right)
+    je change_right
+    jmp nomatch     ; not our key, chain to old ISR
+
+change_up:
+    mov byte [direction], 2
+    jmp exit_kb
+
+change_down:
+    mov byte [direction], 3
+    jmp exit_kb
+
+change_left:
+    mov byte [direction], 1
+    jmp exit_kb
+
+change_right:
+    mov byte [direction], 0
+    jmp exit_kb
+
+nomatch:
+    pop ax
+    jmp far [cs:oldisr] ; call the original ISR
+
+exit_kb:
+    mov al, 0x20
+    out 0x20, al ; send EOI to PIC
+    pop ax
+    iret ; return from interrupt
 
 ; -------------------------------------------------------------------
 ; Timer interrupt service routine (for automatic movement)
@@ -136,14 +179,14 @@ update_pacman_position:
     pop word [col]  ; restore new col
     pop word [row]  ; restore new row
     
- 
+    ; Draw at new position
     call print_pacman
     
     ; ----------------------------
     ; Move Ghosts
     ; ----------------------------
     mov si, ghosts
-    mov cx, 8 ;____________________________________
+    mov cx, 8
     
 ghost_loop:
     ; Save current ghost position
@@ -292,16 +335,16 @@ pacman_direction:
     mov ax, [row]
     mov bx, [col]
     
-   check_dir:
-   push bp         ; save old bp
-   mov bp, sp      ; set up base pointer
-   cmp byte [bp+2], 0
-   je check_right
-   cmp byte [bp+2], 1
-   je check_left
-   cmp byte [bp+2], 2
-   je check_up
-   pop bp          ; restore bp before continuing
+check_dir:
+    push bp         ; save old bp
+    mov bp, sp      ; set up base pointer
+    cmp byte [bp+2], 0
+    je check_right
+    cmp byte [bp+2], 1
+    je check_left
+    cmp byte [bp+2], 2
+    je check_up
+    pop bp          ; restore bp before continuing
 
     ; Check down
     inc ax
@@ -360,7 +403,6 @@ check_position_valid:
     jg invalid_position
     
     ; Map check - must be path (1)
-    ; offset = row * 80 + col
     mov si, ax
     mov ax, 80
     mul si
@@ -384,7 +426,7 @@ position_check_done:
     ret
 
 ; -------------------------------------------------------------------
-; Drawing functions (same as before)
+; Drawing functions
 ; -------------------------------------------------------------------
 
 print_pacman:
@@ -521,8 +563,7 @@ print_ghost:
     pop ax
     ret
 
-erase_ghost:
-    
+erase_ghost:    
     push ax
     push es
     push di
@@ -551,7 +592,6 @@ erase_ghost:
     je ghost_restore_yellow
     cmp al, 5
     je ghost_restore_green
-	
     
     ; Default to empty space
     mov word [es:di], 0x0720
@@ -608,16 +648,26 @@ start:
     int 0x1A
     mov [random_seed], dx
     
-    ; Save old timer ISR
+    ; Save old keyboard ISR
     xor ax, ax
     mov es, ax
+    mov ax, [es:9*4]
+    mov [oldisr], ax
+    mov ax, [es:9*4+2]
+    mov [oldisr+2], ax
+    
+    ; Save old timer ISR
     mov ax, [es:8*4]
     mov [oldtimer], ax
     mov ax, [es:8*4+2]
     mov [oldtimer+2], ax
     
-    ; Install new timer ISR
+    ; Install new keyboard ISR
     cli
+    mov word [es:9*4], kbisr
+    mov [es:9*4+2], cs
+    
+    ; Install new timer ISR
     mov word [es:8*4], timerisr
     mov [es:8*4+2], cs
     sti
@@ -627,14 +677,14 @@ start:
     call print_map
     
     ; Place Pacman on a valid path position
-    ; call place_on_valid_path
-    ; mov [row], ax
-    ; mov [col], bx
-    ; call print_pacman
+    call place_on_valid_path
+    mov [row], ax
+    mov [col], bx
+    call print_pacman
     
     ; Place ghosts on valid path positions
     mov si, ghosts
-    mov cx, 8;------------------------------------------------------------------------------------
+    mov cx, 8
 place_ghosts:
     call place_on_valid_path
     mov [si], ax      ; row
@@ -749,8 +799,8 @@ inner_loop:
     je print_yellow 
     cmp al, 5 
     je print_green
-	cmp al , 10 
-	je print_coins
+    cmp al, 10 
+    je print_coins
     jmp skip_print
     
 print_o:
@@ -800,10 +850,11 @@ print_coins:
     add ax, di          ; ax = row * 80 + col
     shl ax, 1           ; multiply by 2 (char+attr)
     mov di, ax          ; DI now holds video memory offset
-    mov ax, 0x0E00 | 0xDB   
+    mov ax, 0x0E00 | 0x2A   ; yellow asterisk for coin
     mov [es:di], ax
     pop di 
     jmp skip_print
+    
 print_Blue: 
     push di             ; Save column counter
     mov ax, si
@@ -833,4 +884,3 @@ done_print:
     pop bx
     pop ax
     ret
-	
